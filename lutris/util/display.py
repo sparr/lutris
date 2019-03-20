@@ -22,6 +22,10 @@ Output = namedtuple(
 )
 
 
+class NoScreenDetected(Exception):
+    """Raise this when unable to detect screens"""
+
+
 def get_outputs():
     """Return list of namedtuples containing output 'name', 'geometry',
     'rotation' and whether it is the 'primary' display."""
@@ -66,11 +70,6 @@ def get_outputs():
     return outputs
 
 
-def get_output_names():
-    """Return output names from XrandR"""
-    return [output.name for output in get_outputs()]
-
-
 def turn_off_except(display):
     """Use XrandR to turn off displays except the one referenced by `display`"""
     if not display:
@@ -100,19 +99,6 @@ def get_unique_resolutions():
     )
 
 
-def get_current_resolution(monitor=0):
-    """Return the current resolution for the desktop."""
-    resolution = list()
-    for line in _get_vidmodes():
-        if line.startswith("  ") and "*" in line:
-            resolution_match = re.match(r".*?(\d+x\d+).*", line)
-            if resolution_match:
-                resolution.append(resolution_match.groups()[0])
-    if monitor == "all":
-        return resolution
-    return resolution[monitor]
-
-
 def change_resolution(resolution):
     """Change display resolution.
 
@@ -135,10 +121,10 @@ def change_resolution(resolution):
             logger.debug("Switching to %s on %s", display.mode, display.name)
 
             if display.rotation is not None and display.rotation in (
-                "normal",
-                "left",
-                "right",
-                "inverted",
+                    "normal",
+                    "left",
+                    "right",
+                    "inverted",
             ):
                 rotation = display.rotation
             else:
@@ -211,25 +197,49 @@ def _get_graphics_adapters():
     ]
 
 
-class LegacyDisplayManager:
-    get_display_names = staticmethod(get_output_names)
-    get_resolutions = staticmethod(get_resolutions)
+class LegacyDisplayManager:  # pylint: disable=too-few-public-methods
+    """Legacy XrandR based display manager.
+    Does not work on Wayland.
+    """
+    @staticmethod
+    def get_display_names():
+        """Return output names from XrandR"""
+        return [output.name for output in get_outputs()]
+
+    @staticmethod
+    def get_resolutions():
+        return get_resolutions()
+
+    @staticmethod
+    def get_current_resolution():
+        """Return the current resolution for the desktop"""
+        for line in _get_vidmodes():
+            if line.startswith("  ") and "*" in line:
+                resolution_match = re.match(r".*?(\d+x\d+).*", line)
+                if resolution_match:
+                    return resolution_match.groups()[0].split("x")
+        return ("", "")
 
 
-class DisplayManager(object):
+class DisplayManager:
+    """Get display and resolution using GnomeDesktop"""
     def __init__(self):
         screen = Gdk.Screen.get_default()
+        if not screen:
+            raise NoScreenDetected
         self.rr_screen = GnomeDesktop.RRScreen.new(screen)
         self.rr_config = GnomeDesktop.RRConfig.new_current(self.rr_screen)
         self.rr_config.load_current()
 
     def get_display_names(self):
+        """Return names of connected displays"""
         return [
             output_info.get_display_name()
             for output_info in self.rr_config.get_outputs()
         ]
 
     def get_resolutions(self):
+        """Return available resolutions"""
         resolutions = []
         for mode in self.rr_screen.list_modes():
             resolutions.append("%sx%s" % (mode.get_width(), mode.get_height()))
@@ -237,10 +247,25 @@ class DisplayManager(object):
             set(resolutions), key=lambda x: int(x.split("x")[0]), reverse=True
         )
 
+    def get_primary_output(self):
+        """Return the RROutput used as a primary display"""
+        for output in self.rr_screen.list_outputs():
+            if output.get_is_primary():
+                return output
+
+    def get_current_resolution(self):
+        """Return the current resolution for the primary display"""
+        output = self.get_primary_output()
+        if not output:
+            logger.error("Failed to get a default output")
+            return ("", "")
+        current_mode = output.get_current_mode()
+        return str(current_mode.get_width()), str(current_mode.get_height())
+
 
 try:
     DISPLAY_MANAGER = DisplayManager()
-except GLib.Error:
+except (GLib.Error, NoScreenDetected):
     DISPLAY_MANAGER = LegacyDisplayManager()
 
 USE_DRI_PRIME = len(_get_graphics_adapters()) > 1
@@ -291,11 +316,11 @@ def get_compositor_commands():
             "qdbus org.kde.KWin /Compositor org.kde.kwin.Compositing.resume"
         )
     elif (
-        desktop_session == "mate"
-        and system.execute(
-            "gsettings get org.mate.Marco.general compositing-manager", shell=True
-        )
-        == "true"
+            desktop_session == "mate"
+            and system.execute(
+                "gsettings get org.mate.Marco.general compositing-manager", shell=True
+            )
+            == "true"
     ):
         stop_compositor = (
             "gsettings set org.mate.Marco.general compositing-manager false"
@@ -304,12 +329,12 @@ def get_compositor_commands():
             "gsettings set org.mate.Marco.general compositing-manager true"
         )
     elif (
-        desktop_session == "xfce"
-        and system.execute(
-            "xfconf-query --channel=xfwm4 --property=/general/use_compositing",
-            shell=True,
-        )
-        == "true"
+            desktop_session == "xfce"
+            and system.execute(
+                "xfconf-query --channel=xfwm4 --property=/general/use_compositing",
+                shell=True,
+            )
+            == "true"
     ):
         stop_compositor = (
             "xfconf-query --channel=xfwm4 --property=/general/use_compositing --set=false"
@@ -318,13 +343,13 @@ def get_compositor_commands():
             "xfconf-query --channel=xfwm4 --property=/general/use_compositing --set=true"
         )
     elif (
-        desktop_session == "deepin"
-        and system.execute(
-            "dbus-send --session --dest=com.deepin.WMSwitcher --type=method_call "
-            "--print-reply=literal /com/deepin/WMSwitcher com.deepin.WMSwitcher.CurrentWM",
-            shell=True,
-        )
-        == "deepin wm"
+            desktop_session == "deepin"
+            and system.execute(
+                "dbus-send --session --dest=com.deepin.WMSwitcher --type=method_call "
+                "--print-reply=literal /com/deepin/WMSwitcher com.deepin.WMSwitcher.CurrentWM",
+                shell=True,
+            )
+            == "deepin wm"
     ):
         start_compositor, stop_compositor = (
             "dbus-send --session --dest=com.deepin.WMSwitcher --type=method_call "

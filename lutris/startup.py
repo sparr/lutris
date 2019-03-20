@@ -9,10 +9,11 @@ from lutris.util.system import create_folder
 from lutris.util.graphics import drivers
 from lutris.util.graphics import vkquery
 from lutris.util.linux import LINUX_SYSTEM
+from lutris.gui.dialogs import DontShowAgainDialog
 
 
-def check_config():
-    """Check if initial configuration is correct."""
+def init_dirs():
+    """Creates Lutris directories"""
     directories = [
         settings.CONFIG_DIR,
         os.path.join(settings.CONFIG_DIR, "runners"),
@@ -32,11 +33,21 @@ def check_config():
     for directory in directories:
         create_folder(directory)
 
+
+def init_db():
+    """Initialize the SQLite DB"""
     pga.syncdb()
+
+
+def init_lutris():
+    """Run full initialization of Lutris"""
+    init_dirs()
+    init_db()
 
 
 def check_driver():
     """Report on the currently running driver"""
+    driver_info = {}
     if drivers.is_nvidia():
         driver_info = drivers.get_nvidia_driver_info()
         # pylint: disable=logging-format-interpolation
@@ -66,6 +77,20 @@ def check_driver():
             )
         except KeyError:
             logger.error("Unable to get GPU information from '%s'", card)
+
+    if drivers.is_outdated():
+        setting = "hide-outdated-nvidia-driver-warning"
+        if settings.read_setting(setting) != "True":
+            DontShowAgainDialog(
+                setting,
+                "Your Nvidia driver is outdated.",
+                secondary_message="You are currently running driver %s which does not "
+                "fully support all features for Vulkan and DXVK games.\n"
+                "Please upgrade your driver as described in our "
+                "<a href='https://github.com/lutris/lutris/wiki/Installing-drivers'>"
+                "installation guide</a>"
+                % driver_info["nvrm"]["version"]
+            )
 
 
 def check_libs(all_components=False):
@@ -106,7 +131,6 @@ def fill_missing_platforms():
 
 def run_all_checks():
     """Run all startup checks"""
-    check_config()
     check_driver()
     check_libs()
     check_vulkan()
