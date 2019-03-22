@@ -49,7 +49,6 @@ from lutris.startup import init_lutris, run_all_checks
 from lutris.util.wine.dxvk import init_dxvk_versions
 
 from .lutriswindow import LutrisWindow
-from lutris.gui.widgets.tray import LutrisTray
 
 
 class Application(Gtk.Application):
@@ -168,14 +167,6 @@ class Application(Gtk.Application):
         menubar = builder.get_object("menubar")
         self.set_menubar(menubar)
 
-    def set_tray_icon(self):
-        """Creates or destroys a tray icon for the application"""
-        active = settings.read_setting("show_tray_icon", default="false") == "true"
-        if active and not self.tray:
-            self.tray = LutrisTray(application=self)
-        if self.tray:
-            self.tray.set_visible(active)
-
     def do_activate(self):
         if not self.window:
             self.window = LutrisWindow(application=self)
@@ -183,6 +174,7 @@ class Application(Gtk.Application):
             Gtk.StyleContext.add_provider_for_screen(
                 screen, self.css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
+        self.window.present()  # EXPLAIN YOURSELF BEFORE MESSING WITH THAT LINE
 
     @staticmethod
     def _print(command_line, string):
@@ -279,7 +271,6 @@ class Application(Gtk.Application):
 
         # Graphical commands
         self.activate()
-        self.set_tray_icon()
 
         db_game = None
         if game_slug:
